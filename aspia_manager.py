@@ -29,10 +29,12 @@ DEFAULT_CONFIG = {
     "DOWNLOAD_MAP": {
         "client": {
             "arm64": ["apk"],
+            "universal": ["pkg"],
             "x86_64": ["msi", "deb", "rpm"]
         },
         "host": {
             "arm64": ["apk"],
+            "universal": ["pkg"],
             "x86": ["msi"],
             "x86_64": ["msi", "deb", "rpm"]
         },
