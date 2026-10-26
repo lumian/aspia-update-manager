@@ -466,7 +466,13 @@ def handle_channel_list(channel):
     if not updates:
         print("   (пусто)")
     else:
-        for rule in updates:
+        # Сортировка правил по полю source в числовом (версионном) порядке
+        # Например: "3.0.2" -> [3, 0, 2], "3.0.19" -> [3, 0, 19]
+        sorted_updates = sorted(
+            updates, 
+            key=lambda x: [int(p) for p in x.get("source", "0").split(".")]
+        )
+        for rule in sorted_updates:
             print(f"   - {rule.get('source')} -> {rule.get('target')}")
     print("-" * 50 + "\n")
     return True
@@ -512,8 +518,14 @@ def handle_repo_check():
             versions_to_check.add(ver)
             print(f"   ℹ️  Канал '{ch}': latest -> {ver}")
         
-        # Проверка updates targets
-        for rule in ch_data.get("updates", []):
+        # Сортируем правила для красивого вывода при проверке
+        updates = ch_data.get("updates", [])
+        sorted_updates = sorted(
+            updates, 
+            key=lambda x: [int(p) for p in x.get("source", "0").split(".")]
+        )
+        
+        for rule in sorted_updates:
             target = rule.get("target")
             if target and target != "@latest" and validate_version(target):
                 versions_to_check.add(target)
