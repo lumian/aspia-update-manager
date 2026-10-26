@@ -28,7 +28,7 @@ DEFAULT_CONFIG = {
     "TARGET_STORAGE_DIR": "/var/www/aspia-updates/storage/",
     "UPDATE_BASE_URL": "https://aspia.example.com/update/storage/",
     "ASPIA_SIGNER_PATH": "./aspia_signer.py",
-    "PRIVATE_KEY_PATH": "./vars/private.key",
+    "PRIVATE_KEY_PATH": "./keys/private.key",
     "DOWNLOAD_MAP": {
         "client": {
             "arm64": ["apk"],
@@ -65,7 +65,8 @@ def load_config():
             config = json.load(f)
         
         required_keys = ["TARGET_ROOT_DIR", "TARGET_STORAGE_DIR", "UPDATE_BASE_URL",
-                         "ASPIA_SIGNER_PATH", "PRIVATE_KEY_PATH", "DOWNLOAD_MAP", "ALLOWED_CHANNELS"]
+                         "ASPIA_SIGNER_PATH", "PRIVATE_KEY_PATH",
+                         "DOWNLOAD_MAP", "ALLOWED_CHANNELS"]
         for key in required_keys:
             if key not in config:
                 return None, f"В файле '.vars' отсутствует обязательный параметр: '{key}'."
@@ -171,6 +172,41 @@ def sign_json_file(filepath):
         return False
 
 
+def verify_json_file(filepath):
+    """
+    Проверяет подпись JSON файла с помощью внешней утилиты aspia_signer.
+    Использует тот же файл приватного ключа, что и для подписи.
+    Возвращает кортеж: (status: True/False/None, message: str)
+      - True  : подпись валидна
+      - False : подпись невалидна или ошибка проверки
+      - None  : проверка пропущена (утилита или ключ отсутствуют)
+    """
+    signer_path = resolve_path(CONFIG["ASPIA_SIGNER_PATH"])
+    key_path = resolve_path(CONFIG["PRIVATE_KEY_PATH"])
+    
+    if not os.path.isfile(signer_path):
+        return None, f"утилита не найдена: {signer_path}"
+    if not os.path.isfile(key_path):
+        return None, f"приватный ключ не найден: {key_path}"
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, signer_path, "verify", key_path, filepath],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0:
+            return True, "подпись валидна"
+        else:
+            err_msg = result.stderr.strip() if result.stderr else "невалидная подпись"
+            return False, err_msg
+    except subprocess.TimeoutExpired:
+        return False, "таймаут проверки"
+    except Exception as e:
+        return False, f"ошибка вызова утилиты: {e}"
+
+
 def print_manual():
     script_name = get_script_name()
     manual = f"""
@@ -214,7 +250,7 @@ def print_manual():
   - TARGET_STORAGE_DIR  : Абсолютный путь к директории хранения инсталляторов.
   - UPDATE_BASE_URL     : Публичный URL-путь к директории storage.
   - ASPIA_SIGNER_PATH   : Путь к утилите aspia_signer.py (допускается относительный).
-  - PRIVATE_KEY_PATH    : Путь к приватному ключу для подписи (допускается относительный).
+  - PRIVATE_KEY_PATH    : Путь к приватному ключу (используется и для подписи, и для проверки).
   - DOWNLOAD_MAP        : Словарь, определяющий необходимые компоненты, платформы и расширения.
 ================================================================================
 """
@@ -497,12 +533,13 @@ def handle_channel_remove(channel, source):
 
 
 def handle_channel_list(channel):
-    """Выводит текущую конфигурацию канала"""
+    """Выводит текущую конфигурацию канала с проверкой подписей"""
     if not validate_channel(channel):
         print(f"❌ Ошибка: Неверное имя канала '{channel}'.")
         return False
 
     root_dir = get_root_dir()
+    versions_dir = get_versions_dir()
     filepath = os.path.join(root_dir, f"{channel}.json")
     channel_data = load_json_file(filepath)
     
@@ -534,6 +571,48 @@ def handle_channel_list(channel):
         )
         for rule in sorted_updates:
             print(f"   - {rule.get('source')} -> {rule.get('target')}")
+    print("-" * 50)
+
+    # ==========================================================================
+    # ПРОВЕРКА ПОДПИСЕЙ
+    # ==========================================================================
+    print("\n🔐 Проверка подписей:")
+    
+    # 1. Проверка подписи JSON канала
+    status, msg = verify_json_file(filepath)
+    if status is True:
+        print(f"   ✅ {channel}.json          : {msg}")
+    elif status is False:
+        print(f"   ❌ {channel}.json          : {msg}")
+    else:
+        print(f"   ⚠️  {channel}.json          : пропуск ({msg})")
+    
+    # 2. Сбор всех целевых версий для проверки их манифестов
+    versions_to_verify = set()
+    if "latest" in targets:
+        versions_to_verify.add(targets["latest"])
+    for rule in updates:
+        target = rule.get("target")
+        if target and target != "@latest" and validate_version(target):
+            versions_to_verify.add(target)
+    
+    if not versions_to_verify:
+        print("   ℹ️  Целевые версии не заданы, нечего проверять.")
+    else:
+        for ver in sorted(list(versions_to_verify), reverse=True):
+            manifest_path = os.path.join(versions_dir, f"{ver}.json")
+            if not os.path.isfile(manifest_path):
+                print(f"   ⚠️  {ver}.json        : манифест отсутствует")
+                continue
+            
+            status, msg = verify_json_file(manifest_path)
+            if status is True:
+                print(f"   ✅ {ver}.json        : {msg}")
+            elif status is False:
+                print(f"   ❌ {ver}.json        : {msg}")
+            else:
+                print(f"   ⚠️  {ver}.json        : пропуск ({msg})")
+    
     print("-" * 50 + "\n")
     return True
 
@@ -606,6 +685,44 @@ def handle_repo_check():
             else:
                 print(f"      ❌ ОШИБКА: {msg}")
                 issues.append(f"Версия {ver}: {msg}")
+    
+    # ==========================================================================
+    # 4. ПРОВЕРКА ПОДПИСЕЙ ВСЕХ JSON ФАЙЛОВ
+    # ==========================================================================
+    print("\n🔐 4. Проверка подписей JSON файлов:")
+    
+    # Проверяем все файлы каналов
+    for ch in CONFIG["ALLOWED_CHANNELS"]:
+        ch_file = os.path.join(root_dir, f"{ch}.json")
+        if not os.path.isfile(ch_file):
+            continue
+        
+        status, msg = verify_json_file(ch_file)
+        if status is True:
+            print(f"   ✅ {ch}.json          : {msg}")
+        elif status is False:
+            print(f"   ❌ {ch}.json          : {msg}")
+            issues.append(f"Неличная подпись: {ch}.json ({msg})")
+        else:
+            print(f"   ⚠️  {ch}.json          : пропуск ({msg})")
+    
+    # Проверяем все манифесты целевых версий
+    if versions_to_check:
+        for ver in sorted(list(versions_to_check), reverse=True):
+            manifest_path = os.path.join(versions_dir, f"{ver}.json")
+            if not os.path.isfile(manifest_path):
+                continue  # Отсутствие файла уже отмечено в этапе 3
+            
+            status, msg = verify_json_file(manifest_path)
+            if status is True:
+                print(f"   ✅ {ver}.json        : {msg}")
+            elif status is False:
+                print(f"   ❌ {ver}.json        : {msg}")
+                issues.append(f"Неличная подпись: {ver}.json ({msg})")
+            else:
+                print(f"   ⚠️  {ver}.json        : пропуск ({msg})")
+    else:
+        print("   ℹ️  Нет целевых версий для проверки подписей манифестов.")
     
     # Итоговый отчет
     print("\n" + "="*80)
