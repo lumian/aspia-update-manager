@@ -28,18 +28,19 @@ DEFAULT_CONFIG = {
     "UPDATE_BASE_URL": "https://aspia.example.com/update/storage/",
     "DOWNLOAD_MAP": {
         "client": {
-            "x86_64": ["msi"]
+            "arm64": ["apk"],
+            "x86_64": ["msi", "deb", "rpm"]
         },
         "host": {
             "arm64": ["apk"],
             "x86": ["msi"],
-            "x86_64": ["deb", "msi"]
+            "x86_64": ["msi", "deb", "rpm"]
         },
         "router": {
-            "x86_64": ["deb"]
+            "x86_64": ["msi", "deb", "rpm"]
         },
         "relay": {
-            "x86_64": ["deb"]
+            "x86_64": ["msi", "deb", "rpm"]
         }
     },
     "ALLOWED_CHANNELS": ["stable", "beta", "alpha"]
