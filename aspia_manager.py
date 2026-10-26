@@ -10,6 +10,7 @@ import sys
 import re
 import json
 import hashlib
+import subprocess
 import urllib.request
 import urllib.error
 
@@ -26,6 +27,8 @@ DEFAULT_CONFIG = {
     "TARGET_ROOT_DIR": "/var/www/aspia-updates/",
     "TARGET_STORAGE_DIR": "/var/www/aspia-updates/storage/",
     "UPDATE_BASE_URL": "https://aspia.example.com/update/storage/",
+    "ASPIA_SIGNER_PATH": "./aspia_signer.py",
+    "PRIVATE_KEY_PATH": "./vars/private.key",
     "DOWNLOAD_MAP": {
         "client": {
             "arm64": ["apk"],
@@ -61,7 +64,8 @@ def load_config():
         with open(VARS_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
         
-        required_keys = ["TARGET_ROOT_DIR", "TARGET_STORAGE_DIR", "UPDATE_BASE_URL", "DOWNLOAD_MAP", "ALLOWED_CHANNELS"]
+        required_keys = ["TARGET_ROOT_DIR", "TARGET_STORAGE_DIR", "UPDATE_BASE_URL",
+                         "ASPIA_SIGNER_PATH", "PRIVATE_KEY_PATH", "DOWNLOAD_MAP", "ALLOWED_CHANNELS"]
         for key in required_keys:
             if key not in config:
                 return None, f"В файле '.vars' отсутствует обязательный параметр: '{key}'."
@@ -117,6 +121,56 @@ def get_versions_dir():
     return os.path.join(CONFIG["TARGET_ROOT_DIR"], "versions")
 
 
+def resolve_path(path):
+    """
+    Разрешает относительный путь относительно директории скрипта.
+    Абсолютные пути возвращаются без изменений.
+    """
+    if os.path.isabs(path):
+        return path
+    return os.path.normpath(os.path.join(SCRIPT_DIR, path))
+
+
+def sign_json_file(filepath):
+    """
+    Подписывает JSON файл с помощью внешней утилиты aspia_signer.
+    Возвращает True при успешной подписи, False при ошибке или пропуске.
+    """
+    signer_path = resolve_path(CONFIG["ASPIA_SIGNER_PATH"])
+    key_path = resolve_path(CONFIG["PRIVATE_KEY_PATH"])
+    
+    if not os.path.isfile(signer_path):
+        print(f"   ⚠️  Пропуск подписи: утилита не найдена: {signer_path}")
+        return False
+    if not os.path.isfile(key_path):
+        print(f"   ⚠️  Пропуск подписи: приватный ключ не найден: {key_path}")
+        return False
+    
+    try:
+        # Используем sys.executable, чтобы запустить скрипт тем же интерпретатором Python
+        result = subprocess.run(
+            [sys.executable, signer_path, "sign", key_path, filepath],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0:
+            print(f"   🔏 Файл успешно подписан: {os.path.basename(filepath)}.sig")
+            return True
+        else:
+            print(f"   ❌ Ошибка подписи файла {os.path.basename(filepath)}:")
+            if result.stderr:
+                for line in result.stderr.strip().splitlines():
+                    print(f"      {line}")
+            return False
+    except subprocess.TimeoutExpired:
+        print(f"   ❌ Таймаут при подписи файла {os.path.basename(filepath)}")
+        return False
+    except Exception as e:
+        print(f"   ❌ Ошибка при вызове утилиты подписи: {e}")
+        return False
+
+
 def print_manual():
     script_name = get_script_name()
     manual = f"""
@@ -159,6 +213,8 @@ def print_manual():
   - TARGET_ROOT_DIR     : Корневая директория сервера обновлений.
   - TARGET_STORAGE_DIR  : Абсолютный путь к директории хранения инсталляторов.
   - UPDATE_BASE_URL     : Публичный URL-путь к директории storage.
+  - ASPIA_SIGNER_PATH   : Путь к утилите aspia_signer.py (допускается относительный).
+  - PRIVATE_KEY_PATH    : Путь к приватному ключу для подписи (допускается относительный).
   - DOWNLOAD_MAP        : Словарь, определяющий необходимые компоненты, платформы и расширения.
 ================================================================================
 """
@@ -307,6 +363,7 @@ def handle_channel_create(channel):
     
     if save_json_file(filepath, initial_data):
         print(f"   ✅ Канал '{channel}' успешно создан/сброшен: {filepath}")
+        sign_json_file(filepath)
         return True
     return False
 
@@ -339,6 +396,7 @@ def handle_channel_latest(channel, version):
     
     if save_json_file(filepath, channel_data):
         print(f"   ✅ Версия '{version}' успешно установлена как 'latest' для канала '{channel}'")
+        sign_json_file(filepath)
         return True
     return False
 
@@ -402,6 +460,7 @@ def handle_channel_add(channel, source, target):
             print(f"   ⚠️  Предыдущее правило для источника '{source}' было заменено.")
         print(f"   ✅ Добавлено правило обновления: {source} -> {target} в канале '{channel}'")
         print(f"   ℹ️  Целевая версия '{version_to_validate}' успешно прошла проверку целостности.")
+        sign_json_file(filepath)
         return True
     return False
 
@@ -432,6 +491,7 @@ def handle_channel_remove(channel, source):
         
     if save_json_file(filepath, channel_data):
         print(f"   ✅ Правило обновления для источника '{source}' удалено из канала '{channel}'")
+        sign_json_file(filepath)
         return True
     return False
 
@@ -829,6 +889,7 @@ def main():
     
     if save_json_file(json_filepath, manifest):
         print(f"   ✅ Манифест успешно сохранен: {json_filepath}")
+        sign_json_file(json_filepath)
     else:
         fail_count += 1
         
