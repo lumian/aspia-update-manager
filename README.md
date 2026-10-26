@@ -1,9 +1,9 @@
 # Aspia update manager
-Конфигуратор сервера обновлений Aspia 3.x.x.
+Конфигуратор сервера обновлений для Aspia 3.x.x.
 
 Соответствует [официальному описанию](https://github.com/dchapyshev/aspia/blob/master/source/base/update/README.md) принципов работы сервера обновлений Aspia.
 ```
-Attention! This is non a stable version!
+Attention! This version is not stable and is intended for testing only!
 ```
 ```
 Внимание! Эта версия не стабильна и предназначена только для тестирования!
@@ -25,6 +25,7 @@ Attention! This is non a stable version!
 
 ### Контроль и тестирование
 - Реализовано самотестирование конфигурации для проверки консистентности всех файлов
+- Реализована проверка файла настроек и его создание с настройками по-умолчанию по команде
 
 ### Подпись файлов (aspia_signer)
 Реализован автономный (не привязанный к основной кодовой базе) Python скрипт для подписи JSON файлов полностью совместимый с командами официального [aspia_signer](https://github.com/dchapyshev/aspia/tree/master/source/tools/signer).
@@ -33,10 +34,12 @@ Attention! This is non a stable version!
 #### Планируется:
  - Реализация обновления подписей при изменении JSON файлов
  - Автоматизация проверки всех подписей
+ - Дополнительные проверки целостности системы
 
 ## Использование:
 ```
-./aspia_manager.py                                     # Показать справку
+./aspia_manager.py                                     # Показать это сообщение
+./aspia_manager.py createvars                          # Создать файл .vars с настройками по умолчанию
 
 [Управление релизами]
 ./aspia_manager.py download <версия>                   # Скачать файлы, очистить лишнее и создать манифест
@@ -61,6 +64,7 @@ Attention! This is non a stable version!
 ```
 ## Примеры:
 ```
+./aspia_manager.py createvars
 ./aspia_manager.py download 3.1.2
 ./aspia_manager.py channel create stable
 ./aspia_manager.py channel stable latest 3.1.2
@@ -71,8 +75,9 @@ Attention! This is non a stable version!
 
 ## Настройка:
 ```
-Откройте скрипт в текстовом редакторе и измените переменные в блоке CONFIG:
-  - TARGET_ROOT_DIR     : Корневая директория сервера обновлений (здесь лежат <канал>.json и папка versions/).
+Все настройки хранятся в файле '.vars' в той же директории, что и скрипт.
+Файл имеет формат JSON. Основные параметры:
+  - TARGET_ROOT_DIR     : Корневая директория сервера обновлений.
   - TARGET_STORAGE_DIR  : Абсолютный путь к директории хранения инсталляторов.
   - UPDATE_BASE_URL     : Публичный URL-путь к директории storage.
   - DOWNLOAD_MAP        : Словарь, определяющий необходимые компоненты, платформы и расширения.

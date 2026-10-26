@@ -2,6 +2,7 @@
 """
 Aspia Manager: Скрипт для автоматизированного скачивания инсталляторов Aspia, 
 очистки устаревших файлов, генерации релизных манифестов и управления каналами обновлений.
+Настройки загружаются из файла .vars в директории скрипта.
 """
 
 import os
@@ -13,22 +14,18 @@ import urllib.request
 import urllib.error
 
 # ==============================================================================
-# КОНФИГУРАЦИЯ (НАСТРОЙКИ)
+# ИНИЦИАЛИЗАЦИЯ И КОНСТАНТЫ
 # ==============================================================================
-CONFIG = {
-    # Корневая директория сервера обновлений.
-    # В ней автоматически создается поддиректория "versions" для JSON-манифестов,
-    # а также размещаются файлы каналов (<канал>.json).
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VARS_FILE = os.path.join(SCRIPT_DIR, ".vars")
+
+# Глобальная переменная для конфигурации, будет заполнена в main() после проверки
+CONFIG = None
+
+DEFAULT_CONFIG = {
     "TARGET_ROOT_DIR": "/var/www/aspia-updates/",
-    
-    # Абсолютный путь к директории хранения инсталляторов.
-    # Не обязательно должна находиться внутри TARGET_ROOT_DIR.
     "TARGET_STORAGE_DIR": "/var/www/aspia-updates/storage/",
-    
-    # Публичный URL-путь к директории storage (для поля "path" в JSON манифесте).
     "UPDATE_BASE_URL": "https://aspia.example.com/update/storage/",
-    
-    # Карта скачивания: компонент -> платформа -> список расширений.
     "DOWNLOAD_MAP": {
         "client": {
             "x86_64": ["msi"]
@@ -45,11 +42,56 @@ CONFIG = {
             "x86_64": ["deb"]
         }
     },
-    
-    # Разрешенные имена каналов
     "ALLOWED_CHANNELS": ["stable", "beta", "alpha"]
 }
-# ==============================================================================
+
+
+def load_config():
+    """
+    Проверяет наличие и корректность файла .vars.
+    Возвращает кортеж: (config_dict или None, сообщение об ошибке или None)
+    """
+    if not os.path.exists(VARS_FILE):
+        return None, "Файл конфигурации '.vars' не найден в директории скрипта."
+    
+    try:
+        with open(VARS_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        required_keys = ["TARGET_ROOT_DIR", "TARGET_STORAGE_DIR", "UPDATE_BASE_URL", "DOWNLOAD_MAP", "ALLOWED_CHANNELS"]
+        for key in required_keys:
+            if key not in config:
+                return None, f"В файле '.vars' отсутствует обязательный параметр: '{key}'."
+                
+        return config, None
+    except json.JSONDecodeError as e:
+        return None, f"Некорректный формат JSON в файле '.vars'.\nПодробности: {e}"
+    except Exception as e:
+        return None, f"Неожиданная ошибка при чтении файла '.vars': {e}"
+
+
+def handle_create_vars():
+    """Создает файл .vars с настройками по умолчанию."""
+    if os.path.exists(VARS_FILE):
+        print(f"⚠️  Файл '{VARS_FILE}' уже существует.")
+        response = input("Перезаписать его настройками по умолчанию? (y/N): ").strip().lower()
+        if response != 'y':
+            print("   ⏭️  Операция отменена.")
+            return False
+    
+    try:
+        with open(VARS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(DEFAULT_CONFIG, f, indent=4, ensure_ascii=False)
+        print(f"✅ Файл '{VARS_FILE}' успешно создан с настройками по умолчанию!")
+        print("💡 Вы можете отредактировать его перед запуском других команд.")
+        return True
+    except PermissionError:
+        print(f"❌ Ошибка: Нет прав на запись в директорию '{SCRIPT_DIR}'.")
+        print("   Запустите скрипт с правами root или измените права на директорию.")
+        return False
+    except Exception as e:
+        print(f"❌ Ошибка при создании файла конфигурации: {e}")
+        return False
 
 
 def get_script_name():
@@ -80,6 +122,7 @@ def print_manual():
 ================================================================================
 Использование:
   ./{script_name}                                     # Показать это сообщение
+  ./{script_name} createvars                          # Создать файл .vars с настройками по умолчанию
   
   [Управление релизами]
   ./{script_name} download <версия>                   # Скачать файлы, очистить лишнее и создать манифест
@@ -101,15 +144,16 @@ def print_manual():
   <цель>    - Версия назначения или метка "@latest"
 
 Примеры:
+  ./{script_name} createvars
   ./{script_name} download 3.1.2
   ./{script_name} channel create stable
   ./{script_name} channel stable latest 3.1.2
-  ./{script_name} channel stable add 3.0.37 @latest
   ./{script_name} check
 
 Настройка:
-  Откройте скрипт в текстовом редакторе и измените переменные в блоке CONFIG:
-  - TARGET_ROOT_DIR     : Корневая директория сервера обновлений (здесь лежат <канал>.json и папка versions/).
+  Все настройки хранятся в файле '.vars' в той же директории, что и скрипт.
+  Файл имеет формат JSON. Основные параметры:
+  - TARGET_ROOT_DIR     : Корневая директория сервера обновлений.
   - TARGET_STORAGE_DIR  : Абсолютный путь к директории хранения инсталляторов.
   - UPDATE_BASE_URL     : Публичный URL-путь к директории storage.
   - DOWNLOAD_MAP        : Словарь, определяющий необходимые компоненты, платформы и расширения.
@@ -503,6 +547,8 @@ def handle_repo_check():
 
 
 def main():
+    global CONFIG
+    
     if len(sys.argv) < 2:
         print_manual()
         sys.exit(0)
@@ -510,7 +556,26 @@ def main():
     command = sys.argv[1]
     
     # ==========================================================================
-    # ОБРАБОТКА КОМАНДЫ CHECK (ПРОВЕРКА РЕПОЗИТОРИЯ)
+    # ОБРАБОТКА КОМАНДЫ CREATEVARS (без проверки конфигурации)
+    # ==========================================================================
+    if command == "createvars":
+        success = handle_create_vars()
+        sys.exit(0 if success else 1)
+
+    # ==========================================================================
+    # ПРОВЕРКА КОНФИГУРАЦИИ ДЛЯ ВСЕХ ОСТАЛЬНЫХ КОМАНД
+    # ==========================================================================
+    config, error = load_config()
+    if error:
+        print(f"❌ Ошибка конфигурации: {error}")
+        print(f"\n💡 Для создания файла с настройками по умолчанию выполните команду:")
+        print(f"   ./{get_script_name()} createvars\n")
+        sys.exit(1)
+    
+    CONFIG = config
+
+    # ==========================================================================
+    # ОБРАБОТКА КОМАНДЫ CHECK
     # ==========================================================================
     if command == "check":
         handle_repo_check()
