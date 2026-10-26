@@ -207,6 +207,91 @@ def verify_json_file(filepath):
         return False, f"ошибка вызова утилиты: {e}"
 
 
+def handle_resign():
+    """
+    Восстанавливает подписи всех JSON файлов в корневой директории репозитория.
+    Использует команду signdir, которая рекурсивно подписывает все JSON файлы
+    в указанной директории и её поддиректориях.
+    """
+    print("\n" + "="*80)
+    print("🔐 ВОССТАНОВЛЕНИЕ ПОДПИСЕЙ JSON ФАЙЛОВ")
+    print("="*80)
+    
+    signer_path = resolve_path(CONFIG["ASPIA_SIGNER_PATH"])
+    key_path = resolve_path(CONFIG["PRIVATE_KEY_PATH"])
+    root_dir = get_root_dir()
+    
+    # Проверка наличия утилиты
+    if not os.path.isfile(signer_path):
+        print(f"   ❌ Утилита подписи не найдена: {signer_path}")
+        return False
+    
+    # Проверка наличия приватного ключа
+    if not os.path.isfile(key_path):
+        print(f"   ❌ Приватный ключ не найден: {key_path}")
+        return False
+    
+    # Проверка наличия корневой директории
+    if not os.path.isdir(root_dir):
+        print(f"   ❌ Корневая директория репозитория не найдена: {root_dir}")
+        print("   💡 Сначала создайте каналы командой 'channel create <канал>'")
+        return False
+    
+    # Подсчет количества JSON файлов перед подписанием
+    json_files_count = 0
+    for dirpath, _, filenames in os.walk(root_dir):
+        for filename in filenames:
+            if filename.endswith(".json"):
+                json_files_count += 1
+    
+    if json_files_count == 0:
+        print(f"   ⚠️  В директории '{root_dir}' не найдено ни одного JSON файла.")
+        print("   💡 Сначала создайте каналы и манифесты версий.")
+        return False
+    
+    print(f"   📁 Директория для подписи : {root_dir}")
+    print(f"   🔑 Приватный ключ         : {key_path}")
+    print(f"   🛠️  Утилита подписи        : {signer_path}")
+    print(f"   📄 Найдено JSON файлов    : {json_files_count}")
+    print()
+    print("   🔄 Выполняется массовая подпись (signdir)...")
+    print("-" * 80)
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, signer_path, "signdir", key_path, root_dir],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        # Выводим stdout утилиты (обычно там список подписанных файлов)
+        if result.stdout:
+            for line in result.stdout.strip().splitlines():
+                print(f"   {line}")
+        
+        if result.returncode == 0:
+            print("-" * 80)
+            print(f"   ✅ Подписи успешно восстановлены для всех JSON файлов в '{root_dir}'")
+            return True
+        else:
+            print("-" * 80)
+            print(f"   ❌ Ошибка при массовом подписании (код возврата: {result.returncode})")
+            if result.stderr:
+                print("   Подробности:")
+                for line in result.stderr.strip().splitlines():
+                    print(f"      {line}")
+            return False
+    except subprocess.TimeoutExpired:
+        print("-" * 80)
+        print("   ❌ Таймаут при выполнении mass signing (5 минут)")
+        return False
+    except Exception as e:
+        print("-" * 80)
+        print(f"   ❌ Ошибка при вызове утилиты подписи: {e}")
+        return False
+
+
 def print_manual():
     script_name = get_script_name()
     manual = f"""
@@ -227,8 +312,9 @@ def print_manual():
   ./{script_name} channel <канал> remove <источник>   # Удалить правило обновления для версии-источника
   ./{script_name} channel <канал> list                # Показать текущую конфигурацию канала
   
-  [Проверка целостности]
+  [Проверка и восстановление целостности]
   ./{script_name} check                               # Проверить целостность всей конфигурации репозитория
+  ./{script_name} resign                              # Восстановить подписи всех JSON файлов в репозитории
 
 Параметры:
   <канал>   - Имя канала: только "stable", "beta" или "alpha"
@@ -236,16 +322,9 @@ def print_manual():
   <источник>- Версия, с которой выполняется обновление (например: 3.0.37)
   <цель>    - Версия назначения или метка "@latest"
 
-Примеры:
-  ./{script_name} createvars
-  ./{script_name} download 3.1.2
-  ./{script_name} channel create stable
-  ./{script_name} channel stable latest 3.1.2
-  ./{script_name} check
-
 Настройка:
   Все настройки хранятся в файле '.vars' в той же директории, что и скрипт.
-  Файл имеет формат JSON. Основные параметры:
+  Файл имеет формат JSON. Список параметров:
   - TARGET_ROOT_DIR     : Корневая директория сервера обновлений.
   - TARGET_STORAGE_DIR  : Абсолютный путь к директории хранения инсталляторов.
   - UPDATE_BASE_URL     : Публичный URL-путь к директории storage.
@@ -735,6 +814,7 @@ def handle_repo_check():
         for issue in issues:
             print(f"      - {issue}")
         print("\n   💡 Используйте команду 'download <версия>' для исправления отсутствующих файлов.")
+        print("   💡 Если проблемы только с подписями, используйте команду 'resign' для их восстановления.")
     print("="*80 + "\n")
 
 
@@ -772,6 +852,13 @@ def main():
     if command == "check":
         handle_repo_check()
         sys.exit(0)
+
+    # ==========================================================================
+    # ОБРАБОТКА КОМАНДЫ RESIGN (восстановление подписей)
+    # ==========================================================================
+    if command == "resign":
+        success = handle_resign()
+        sys.exit(0 if success else 1)
 
     # ==========================================================================
     # ОБРАБОТКА КОМАНДЫ CHANNEL
